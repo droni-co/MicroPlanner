@@ -3,7 +3,10 @@
   <main class="app-shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">C</span><div><p class="eyebrow">Personal agent workspace</p><h1>Claude, a tu lado</h1></div></div>
-      <button class="settings-toggle" type="button" @click="showSettings = !showSettings"><span>{{ showSettings ? 'Ocultar' : 'Configurar' }}</span><span aria-hidden="true">&#9881;</span></button>
+      <div class="topbar-actions">
+        <button class="print-button" type="button" title="Imprimir conversación" aria-label="Imprimir conversación" @click="printConversation"><span aria-hidden="true">&#128424;</span><span>Imprimir</span></button>
+        <button class="settings-toggle" type="button" @click="showSettings = !showSettings"><span>{{ showSettings ? 'Ocultar' : 'Configurar' }}</span><span aria-hidden="true">&#9881;</span></button>
+      </div>
     </header>
     <section v-if="showSettings" class="settings-panel">
       <div><p class="eyebrow">Contexto persistente</p><h2>System prompt</h2><p class="muted">Define sus skills, tono, límites e información de referencia.</p></div>
@@ -12,7 +15,10 @@
     <section ref="conversationElement" class="conversation" :class="{ empty: !messages.length }">
       <div v-if="!messages.length" class="welcome"><span class="welcome-symbol">✦</span><h2>¿Qué construimos hoy?</h2><p>Describe una tarea y Claude trabajará contigo paso a paso.</p></div>
       <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
-        <div class="message-label">{{ message.role === 'user' ? 'Tú' : 'Claude' }}</div><div class="message-content">{{ message.content }}<span v-if="message.streaming" class="cursor" /></div>
+        <div class="message-label">{{ message.role === 'user' ? 'Tú' : 'Claude' }}</div>
+        <div v-if="message.role === 'assistant'" class="message-content markdown-body" v-html="renderMarkdown(message.content)" />
+        <div v-else class="message-content">{{ message.content }}</div>
+        <span v-if="message.streaming" class="cursor" />
       </article>
       <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
     </section>
@@ -26,6 +32,8 @@
 
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 
 type Message = { id: number; role: 'user' | 'assistant'; content: string; streaming?: boolean }
 const messages = ref<Message[]>([])
@@ -35,6 +43,9 @@ const showSettings = ref(false)
 const isStreaming = ref(false)
 const errorMessage = ref('')
 const conversationElement = ref<HTMLElement | null>(null)
+marked.setOptions({ breaks: true, gfm: true })
+const renderMarkdown = (content: string) => DOMPurify.sanitize(marked.parse(content) as string)
+const printConversation = () => window.print()
 const scrollToBottom = async () => { await nextTick(); conversationElement.value?.scrollTo({ top: conversationElement.value.scrollHeight, behavior: 'smooth' }) }
 
 const sendMessage = async () => {
