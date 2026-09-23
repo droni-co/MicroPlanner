@@ -1,7 +1,11 @@
-<script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
-</script>
 
 <template>
-  <HelloWorld />
+  <div class="dark">
+    <DuiButton>Hola</DuiButton>
+    <h1>Hola mundo</h1>
+  </div>
 </template>
+<script setup lang="ts">
+import { DuiButton } from '@dronico/droni-kit';
+
+</script>
