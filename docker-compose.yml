@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    environment:
+      APP_KEY: ${APP_KEY}
+      PORT: 3000
+      FRONTEND_URL: https://${DOMAIN_FRONT}
+      MAX_CONTEXT_CHARS: ${MAX_CONTEXT_CHARS:-100000}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-5}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      # nginx-proxy + acme-companion
+      VIRTUAL_HOST: ${DOMAIN_API}
+      VIRTUAL_PORT: 3000
+      LETSENCRYPT_HOST: ${DOMAIN_API}
+    networks:
+      - nginx-proxy
+
+  front:
+    build:
+      context: ./apps/front
+    restart: unless-stopped
+    environment:
+      # nginx-proxy + acme-companion
+      VIRTUAL_HOST: ${DOMAIN_FRONT}
+      LETSENCRYPT_HOST: ${DOMAIN_FRONT}
+    networks:
+      - nginx-proxy
+    depends_on:
+      - api
+
+networks:
+  nginx-proxy:
+    external: true
