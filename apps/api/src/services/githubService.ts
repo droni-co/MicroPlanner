@@ -22,10 +22,7 @@ export class GitHubService {
   private readonly token: string
   private readonly baseUrl = 'https://api.github.com'
 
-  constructor(
-    organization = process.env.GITHUB_ORG || '',
-    token = process.env.GITHUB_TOKEN || '',
-  ) {
+  constructor(organization: string, token: string) {
     if (!organization || !token) throw new Error('Faltan GITHUB_ORG o GITHUB_TOKEN en el archivo .env')
     this.organization = organization
     this.token = token

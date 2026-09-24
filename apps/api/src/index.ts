@@ -1,6 +1,7 @@
 import express from 'express'
 import morgan from 'morgan'
 import session from 'express-session'
+import type { SessionConfig } from 'express-session'
 import dotenv from 'dotenv'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
@@ -10,7 +11,6 @@ dotenv.config()
 
 const app = express()
 const port = Number(process.env.PORT || 3000)
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 const frontendUrl = ((process.env.FRONTEND_URL || 'http://localhost:5173').split('APP_KEY=')[0] || 'http://localhost:5173').replace(/\s+$/, '')
 
 app.use(morgan('tiny'))
@@ -19,6 +19,7 @@ app.use(express.json({ limit: '1mb' }))
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', frontendUrl)
   res.header('Access-Control-Allow-Headers', 'Content-Type')
+  res.header('Access-Control-Allow-Credentials', 'true')
   if (req.method === 'OPTIONS') return res.sendStatus(204)
   next()
 })
@@ -173,20 +174,21 @@ const optionalNumber = (input: Record<string, unknown>, name: string): number | 
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined
 }
 
-const executeTool = async (name: string, input: unknown): Promise<unknown> => {
+const executeTool = async (name: string, input: unknown, config: SessionConfig): Promise<unknown> => {
   return name === 'search_repositories' || name === 'get_repository'
-    ? executeGitHubTool(name, input)
-    : executeAzureTool(name, input)
+    ? executeGitHubTool(name, input, config)
+    : executeAzureTool(name, input, config)
 }
 
 const streamWithOpenAIProvider = async (
   messages: ChatMessage[],
   systemPrompt: string | undefined,
   send: (event: string, data: unknown) => void,
+  config: SessionConfig,
 ) => {
   const client = new OpenAI({
-    apiKey: process.env.DEEPSEEK_API_KEY,
-    baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+    apiKey: config.iaApiKey,
+    baseURL: 'https://api.deepseek.com',
   })
   const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [...azureDevOpsTools, ...githubTools].map((tool) => ({
     type: 'function',
@@ -231,7 +233,7 @@ const streamWithOpenAIProvider = async (
     for (const toolCall of toolCalls.values()) {
       send('tool', { name: toolCall.name, status: 'running' })
       try {
-        const result = await executeTool(toolCall.name, JSON.parse(toolCall.arguments))
+        const result = await executeTool(toolCall.name, JSON.parse(toolCall.arguments), config)
         conversation.push({ role: 'tool', tool_call_id: toolCall.id, content: truncate(JSON.stringify(result), maxToolResultChars) })
         send('tool', { name: toolCall.name, status: 'completed' })
       } catch (error) {
@@ -243,9 +245,9 @@ const streamWithOpenAIProvider = async (
   }
 }
 
-const executeAzureTool = async (name: string, rawInput: unknown): Promise<unknown> => {
+const executeAzureTool = async (name: string, rawInput: unknown, config: SessionConfig): Promise<unknown> => {
   const input = asRecord(rawInput)
-  const service = new AzureDevOpsService()
+  const service = new AzureDevOpsService(config.devopsOrg, config.devopsPat)
   if (name === 'list_projects') return service.listProjects()
   if (name === 'get_project') return service.getProject(requiredString(input, 'project'))
   if (name === 'list_work_items') {
@@ -265,28 +267,51 @@ const executeAzureTool = async (name: string, rawInput: unknown): Promise<unknow
   throw new Error(`Herramienta desconocida: ${name}`)
 }
 
-const executeGitHubTool = async (name: string, rawInput: unknown): Promise<unknown> => {
+const executeGitHubTool = async (name: string, rawInput: unknown, config: SessionConfig): Promise<unknown> => {
   const input = asRecord(rawInput)
-  const service = new GitHubService()
+  const service = new GitHubService(config.ghOrg, config.ghPat)
   if (name === 'search_repositories') return service.searchRepositories(requiredString(input, 'query'), optionalNumber(input, 'top'))
   if (name === 'get_repository') return service.getRepository(requiredString(input, 'repository'), typeof input.owner === 'string' && input.owner.trim() ? input.owner.trim() : undefined)
   throw new Error(`Herramienta desconocida: ${name}`)
 }
 
+const isSessionConfig = (value: unknown): value is SessionConfig => {
+  if (!value || typeof value !== 'object') return false
+  const config = value as Record<string, unknown>
+  return (config.iaApiProvider === 'deepseek' || config.iaApiProvider === 'anthropic')
+    && ['iaApiKey', 'devopsOrg', 'devopsPat', 'ghOrg', 'ghPat'].every((key) => typeof config[key] === 'string' && Boolean(config[key]))
+}
+
+app.get('/api/config', (req, res) => {
+  return res.json(req.session.config || null)
+})
+
+app.put('/api/config', (req, res) => {
+  const body = req.body as Partial<SessionConfig>
+  const config = {
+    iaApiProvider: body.iaApiProvider,
+    iaApiKey: body.iaApiKey?.trim(),
+    devopsOrg: body.devopsOrg?.trim(),
+    devopsPat: body.devopsPat?.trim(),
+    ghOrg: body.ghOrg?.trim(),
+    ghPat: body.ghPat?.trim(),
+  }
+  if (!isSessionConfig(config)) {
+    return res.status(400).json({ error: 'Debes completar el proveedor, API key, organizaciones y PATs' })
+  }
+  req.session.config = config
+  return res.json({ ok: true, config })
+})
+
 app.post('/api/chat', async (req, res) => {
   const { messages, systemPrompt } = req.body as { messages?: ChatMessage[]; systemPrompt?: string }
-  const provider = (process.env.AI_PROVIDER || 'ANTHROPIC').toUpperCase()
+  const config = req.session.config
+  if (!config || !isSessionConfig(config)) {
+    return res.status(400).json({ error: 'Configura el proveedor de IA y las conexiones antes de iniciar el chat' })
+  }
+  const provider = config.iaApiProvider.toUpperCase()
   console.log(`[chat] request provider=${provider} messages=${messages?.length || 0}`)
 
-  if (provider === 'COPILOT') {
-    return res.status(501).json({ error: 'GitHub Models fue retirado. Usa DEEPSEEK o ANTHROPIC como AI_PROVIDER.' })
-  }
-  if (provider === 'DEEPSEEK' && !process.env.DEEPSEEK_API_KEY) {
-    return res.status(500).json({ error: 'Falta configurar DEEPSEEK_API_KEY en el archivo .env' })
-  }
-  if (provider !== 'DEEPSEEK' && !process.env.ANTHROPIC_API_KEY) {
-    return res.status(500).json({ error: 'Falta configurar ANTHROPIC_API_KEY en el archivo .env' })
-  }
   if (!messages?.length || messages.some((message) => !message.content?.trim())) {
     return res.status(400).json({ error: 'Debes enviar al menos un mensaje válido' })
   }
@@ -306,10 +331,11 @@ app.post('/api/chat', async (req, res) => {
 
   try {
     if (provider === 'DEEPSEEK') {
-      await streamWithOpenAIProvider(messages, systemPrompt, send)
+      await streamWithOpenAIProvider(messages, systemPrompt, send, config)
       send('done', { ok: true })
       return
     }
+    const anthropic = new Anthropic({ apiKey: config.iaApiKey })
     const conversation: Anthropic.MessageParam[] = compactHistory(messages)
       .map(({ role, content }) => ({ role, content }))
     for (let turn = 0; turn < 8; turn += 1) {
@@ -332,7 +358,7 @@ app.post('/api/chat', async (req, res) => {
       for (const toolUse of toolUses) {
         send('tool', { name: toolUse.name, status: 'running' })
         try {
-          const result = await executeTool(toolUse.name, toolUse.input)
+          const result = await executeTool(toolUse.name, toolUse.input, config)
           toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: truncate(JSON.stringify(result), maxToolResultChars) })
           send('tool', { name: toolUse.name, status: 'completed' })
         } catch (error) {
@@ -353,7 +379,7 @@ app.post('/api/chat', async (req, res) => {
 })
 
 app.get('/', (req, res) => {
-  return res.json(req.session)
+  return res.json({ ok: true, service: 'micro-planner-api' })
 })
 
 app.listen(port, () => {

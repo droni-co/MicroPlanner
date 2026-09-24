@@ -40,10 +40,7 @@ export class AzureDevOpsService {
   private readonly pat: string
   private readonly baseUrl: string
 
-  constructor(
-    organization = process.env.AZURE_DEVOPS_ORG || '',
-    pat = process.env.AZURE_DEVOPS_PAT || '',
-  ) {
+  constructor(organization: string, pat: string) {
     if (!organization || !pat) throw new Error('Faltan AZURE_DEVOPS_ORG o AZURE_DEVOPS_PAT en el archivo .env')
     this.organization = organization
     this.pat = pat

@@ -9,8 +9,17 @@
       </div>
     </header>
     <section v-if="showSettings" class="settings-panel">
-      <div><p class="eyebrow">Contexto persistente</p><h2>System prompt</h2><p class="muted">Define sus skills, tono, límites e información de referencia.</p></div>
-      <textarea v-model="systemPrompt" class="prompt-input" aria-label="System prompt" placeholder="Eres mi agente de desarrollo. Ayúdame a..." />
+      <div class="settings-heading"><p class="eyebrow">Configuración de sesión</p><h2>Conexiones del agente</h2><p class="muted">Estos valores se guardan en tu sesión y se mantienen al recargar.</p></div>
+      <div class="config-grid">
+        <label>Proveedor de IA<select v-model="configForm.iaApiProvider"><option value="anthropic">Anthropic</option><option value="deepseek">DeepSeek</option></select></label>
+        <label>API key de IA<input v-model="configForm.iaApiKey" type="password" autocomplete="off" placeholder="sk-..." /></label>
+        <label>Organización Azure DevOps<input v-model="configForm.devopsOrg" placeholder="mi-organizacion" /></label>
+        <label>PAT Azure DevOps<input v-model="configForm.devopsPat" type="password" autocomplete="off" /></label>
+        <label>Organización GitHub<input v-model="configForm.ghOrg" placeholder="mi-organizacion" /></label>
+        <label>PAT GitHub<input v-model="configForm.ghPat" type="password" autocomplete="off" /></label>
+        <div class="config-actions"><button class="save-config-button" type="button" :disabled="isSavingConfig" @click="saveConfig">{{ isSavingConfig ? 'Guardando...' : 'Guardar conexiones' }}</button><span v-if="configMessage" class="config-message">{{ configMessage }}</span></div>
+      </div>
+      <div class="system-prompt-setting"><p class="eyebrow">Contexto del agente</p><textarea v-model="systemPrompt" class="prompt-input" aria-label="System prompt" placeholder="Eres mi agente de desarrollo. Ayúdame a..." /></div>
     </section>
     <section ref="conversationElement" class="conversation" :class="{ empty: !messages.length }">
       <div v-if="!messages.length" class="welcome"><span class="welcome-symbol">✦</span><h2>¿Qué construimos hoy?</h2><p>Describe una tarea y Claude trabajará contigo paso a paso.</p></div>
@@ -35,11 +44,17 @@ import { nextTick, ref } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 
+type Provider = 'anthropic' | 'deepseek'
+type SessionConfig = { iaApiProvider: Provider; iaApiKey: string; devopsOrg: string; devopsPat: string; ghOrg: string; ghPat: string }
 type Message = { id: number; role: 'user' | 'assistant'; content: string; streaming?: boolean }
 const messages = ref<Message[]>([])
 const draft = ref('')
 const systemPrompt = ref('Eres mi agente personal. Sé claro, práctico y directo. Ayúdame a completar tareas y explica las decisiones importantes.')
-const showSettings = ref(false)
+const showSettings = ref(true)
+const isConfigured = ref(false)
+const isSavingConfig = ref(false)
+const configMessage = ref('')
+const configForm = ref<SessionConfig>({ iaApiProvider: 'anthropic', iaApiKey: '', devopsOrg: '', devopsPat: '', ghOrg: '', ghPat: '' })
 const isStreaming = ref(false)
 const errorMessage = ref('')
 const conversationElement = ref<HTMLElement | null>(null)
@@ -48,15 +63,34 @@ const renderMarkdown = (content: string) => DOMPurify.sanitize(marked.parse(cont
 const printConversation = () => window.print()
 const scrollToBottom = async () => { await nextTick(); conversationElement.value?.scrollTo({ top: conversationElement.value.scrollHeight, behavior: 'smooth' }) }
 
+const loadConfig = async () => {
+  const response = await fetch('/api/config', { credentials: 'include' })
+  const savedConfig = await response.json() as SessionConfig | null
+  if (savedConfig) { configForm.value = savedConfig; isConfigured.value = true; showSettings.value = false }
+}
+
+const saveConfig = async () => {
+  isSavingConfig.value = true; configMessage.value = ''
+  try {
+    const response = await fetch('/api/config', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(configForm.value) })
+    const result = await response.json() as { error?: string; config?: SessionConfig }
+    if (!response.ok || !result.config) throw new Error(result.error || 'No se pudo guardar la configuración')
+    configForm.value = result.config; isConfigured.value = true; configMessage.value = 'Configuración guardada'; showSettings.value = false
+  } catch (error) { configMessage.value = error instanceof Error ? error.message : 'No se pudo guardar la configuración' }
+  finally { isSavingConfig.value = false }
+}
+
+void loadConfig().catch(() => { configMessage.value = 'No se pudo cargar la configuración de sesión' })
+
 const sendMessage = async () => {
   const content = draft.value.trim()
-  if (!content || isStreaming.value) return
+  if (!content || isStreaming.value || !isConfigured.value) return
   errorMessage.value = ''; draft.value = ''
   messages.value.push({ id: Date.now(), role: 'user', content })
   const assistantMessage: Message = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true }
   messages.value.push(assistantMessage); isStreaming.value = true; await scrollToBottom()
   try {
-    const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt: systemPrompt.value, messages: messages.value.filter(({ content: text }) => text).map(({ role, content: text }) => ({ role, content: text })) }) })
+    const response = await fetch('/api/chat', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt: systemPrompt.value, messages: messages.value.filter(({ content: text }) => text).map(({ role, content: text }) => ({ role, content: text })) }) })
     if (!response.ok || !response.body) { const result = await response.json().catch(() => ({ error: 'Error de conexión' })); throw new Error(result.error) }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''
     while (true) {
