@@ -21,7 +21,7 @@
       </div>
       <div class="system-prompt-setting"><p class="eyebrow">Contexto del agente</p><textarea v-model="systemPrompt" class="prompt-input" aria-label="System prompt" placeholder="Eres mi agente de desarrollo. Ayúdame a..." /></div>
     </section>
-    <section ref="conversationElement" class="conversation" :class="{ empty: !messages.length }">
+    <section ref="conversationElement" class="conversation" :class="{ empty: !messages.length }" @click="handleConversationClick">
       <div v-if="!messages.length" class="welcome"><span class="welcome-symbol">✦</span><h2>¿Qué construimos hoy?</h2><p>Describe una tarea y Claude trabajará contigo paso a paso.</p></div>
       <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
         <div class="message-label">{{ message.role === 'user' ? 'Tú' : 'Claude' }}</div>
@@ -40,9 +40,10 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, onUpdated, ref } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
+import mermaid from 'mermaid'
 
 type Provider = 'anthropic' | 'deepseek'
 type SessionConfig = { iaApiProvider: Provider; iaApiKey: string; devopsOrg: string; devopsPat: string; ghOrg: string; ghPat: string }
@@ -58,10 +59,70 @@ const configForm = ref<SessionConfig>({ iaApiProvider: 'anthropic', iaApiKey: ''
 const isStreaming = ref(false)
 const errorMessage = ref('')
 const conversationElement = ref<HTMLElement | null>(null)
+const mermaidSources = new Map<string, string>()
+let mermaidCounter = 0
 marked.setOptions({ breaks: true, gfm: true })
-const renderMarkdown = (content: string) => DOMPurify.sanitize(marked.parse(content) as string)
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: 'strict',
+  theme: 'base',
+  htmlLabels: false,
+  themeVariables: {
+    darkMode: true,
+    background: '#202522',
+    primaryColor: '#303a34',
+    primaryTextColor: '#f2f4ef',
+    primaryBorderColor: '#b8c6b9',
+    lineColor: '#d9e2d9',
+    secondaryColor: '#26302a',
+    tertiaryColor: '#202522',
+    edgeLabelBackground: '#202522',
+  },
+})
+const escapeHtml = (value: string) => value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] || character)
+marked.use({
+  renderer: {
+    code(token) {
+      if (token.lang?.toLowerCase() !== 'mermaid') return false
+      const id = `diagram-${++mermaidCounter}`
+      mermaidSources.set(id, token.text)
+      return `<div class="mermaid-block" data-mermaid-block="${id}"><div class="mermaid-toolbar"><span>Diagrama</span><button type="button" class="mermaid-toggle" data-mermaid-toggle="${id}">Ver código</button></div><div class="mermaid-render" data-mermaid-render="${id}"></div><pre class="mermaid-source" data-mermaid-source="${id}" hidden><code>${escapeHtml(token.text)}</code></pre><p class="mermaid-error" data-mermaid-error="${id}" hidden></p></div>`
+    },
+  },
+})
+const renderMarkdown = (content: string) => DOMPurify.sanitize(marked.parse(content) as string, {
+  ADD_ATTR: ['data-mermaid-block', 'data-mermaid-render', 'data-mermaid-source', 'data-mermaid-error', 'data-mermaid-toggle'],
+})
 const printConversation = () => window.print()
-const scrollToBottom = async () => { await nextTick(); conversationElement.value?.scrollTo({ top: conversationElement.value.scrollHeight, behavior: 'smooth' }) }
+const renderMermaidDiagrams = async () => {
+  const blocks = conversationElement.value?.querySelectorAll<HTMLElement>('[data-mermaid-block]') || []
+  for (const block of blocks) {
+    const id = block.dataset.mermaidBlock
+    const target = id ? block.querySelector<HTMLElement>(`[data-mermaid-render="${id}"]`) : null
+    const source = id ? mermaidSources.get(id) : null
+    if (!id || !target || !source || target.dataset.rendered === 'true') continue
+    try {
+      const result = await mermaid.render(`mermaid-svg-${id}`, source)
+      target.innerHTML = DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } })
+      target.dataset.rendered = 'true'
+    } catch (error) {
+      const errorElement = block.querySelector<HTMLElement>(`[data-mermaid-error="${id}"]`)
+      if (errorElement) { errorElement.textContent = error instanceof Error ? error.message : 'No se pudo renderizar el diagrama'; errorElement.hidden = false }
+      console.error('[Mermaid] No se pudo renderizar el diagrama', error)
+    }
+  }
+}
+onUpdated(() => { void renderMermaidDiagrams() })
+const handleConversationClick = (event: MouseEvent) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-mermaid-toggle]')
+  if (!button) return
+  const id = button.dataset.mermaidToggle
+  const source = id ? conversationElement.value?.querySelector<HTMLElement>(`[data-mermaid-source="${id}"]`) : null
+  if (!source) return
+  source.hidden = !source.hidden
+  button.textContent = source.hidden ? 'Ver código' : 'Ocultar código'
+}
+const scrollToBottom = async () => { await nextTick(); conversationElement.value?.scrollTo({ top: conversationElement.value.scrollHeight, behavior: 'smooth' }); await renderMermaidDiagrams() }
 
 const loadConfig = async () => {
   const response = await fetch('/api/config', { credentials: 'include' })
