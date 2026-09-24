@@ -2,7 +2,11 @@
 <template>
   <main class="app-shell">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">C</span><div><p class="eyebrow">Personal agent workspace</p><h1>Claude, a tu lado</h1></div></div>
+      <div class="brand"><span class="brand-mark">C</span><div>
+        <p class="eyebrow">
+          Personal agent workspace
+        </p>
+        <h1>MicroPlanner</h1></div></div>
       <div class="topbar-actions">
         <button class="print-button" type="button" title="Imprimir conversación" aria-label="Imprimir conversación" @click="printConversation"><span aria-hidden="true">&#128424;</span><span>Imprimir</span></button>
         <button class="settings-toggle" type="button" @click="showSettings = !showSettings"><span>{{ showSettings ? 'Ocultar' : 'Configurar' }}</span><span aria-hidden="true">&#9881;</span></button>
@@ -22,9 +26,9 @@
       <div class="system-prompt-setting"><p class="eyebrow">Contexto del agente</p><textarea v-model="systemPrompt" class="prompt-input" aria-label="System prompt" placeholder="Eres mi agente de desarrollo. Ayúdame a..." /></div>
     </section>
     <section ref="conversationElement" class="conversation" :class="{ empty: !messages.length }" @click="handleConversationClick">
-      <div v-if="!messages.length" class="welcome"><span class="welcome-symbol">✦</span><h2>¿Qué construimos hoy?</h2><p>Describe una tarea y Claude trabajará contigo paso a paso.</p></div>
+      <div v-if="!messages.length" class="welcome"><span class="welcome-symbol">✦</span><h2>¿Qué construimos hoy?</h2><p>Describe una tarea y MicroPlanner trabajará contigo paso a paso.</p></div>
       <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
-        <div class="message-label">{{ message.role === 'user' ? 'Tú' : 'Claude' }}</div>
+        <div class="message-label">{{ message.role === 'user' ? 'Tú' : 'MicroPlanner' }}</div>
         <div v-if="message.role === 'assistant'" class="message-content markdown-body" v-html="renderMarkdown(message.content)" />
         <div v-else class="message-content">{{ message.content }}</div>
         <span v-if="message.streaming" class="cursor" />
